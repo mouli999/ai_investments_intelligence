@@ -12,10 +12,36 @@ def process_raw_stock_data():
         return
         
     raw_files = [f for f in os.listdir(raw_dir) if f.endswith('.csv')]
-    
+    if not raw_files:
+        print("❌ No raw CSV files found.")
+        return
+
+    # --- SELECT ONLY THE LATEST RAW FILE PER TICKER ---
+    # Group raw files by their base ticker name to find the most recent date stamp
+    latest_files_map = {}
     for filename in raw_files:
+        # Example filename: HDFCBANK_NS_raw_2026-10-21.csv -> Base: HDFCBANK_NS
+        if "_raw_" in filename:
+            ticker_base = filename.split("_raw_")[0]
+            # Files are date-stamped, so sorting alphabetically or by filename string gives the latest date
+            if ticker_base not in latest_files_map or filename > latest_files_map[ticker_base]:
+                latest_files_map[ticker_base] = filename
+
+    target_raw_files = list(latest_files_map.values())
+    print(preprocessing_log := f"🎯 Identified latest raw snapshots to process: {target_raw_files}\n")
+
+    # Optional: Clean up existing processed files to avoid stale data clutter
+    for filename in os.listdir(processed_dir):
+        if filename.endswith(".csv"):
+            try:
+                os.remove(os.path.join(processed_dir, filename))
+            except Exception:
+                pass
+    # ------------------------------------------------
+
+    for filename in target_raw_files:
         file_path = os.path.join(raw_dir, filename)
-        print(f"Processing {filename}...")
+        print(f"Processing latest snapshot: {filename}...")
         
         df = pd.read_csv(file_path)
         
@@ -40,3 +66,4 @@ def process_raw_stock_data():
 
 if __name__ == "__main__":
     process_raw_stock_data()
+    

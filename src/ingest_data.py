@@ -4,6 +4,7 @@ from datetime import datetime
 import yfinance as yf
 
 def fetch_and_save_data():
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     raw_dir = os.path.join("data", "raw")
     os.makedirs(raw_dir, exist_ok=True)
     

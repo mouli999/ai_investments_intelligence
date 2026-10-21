@@ -2,7 +2,6 @@ import os
 import pandas as pd
 
 def process_raw_stock_data():
-    # Resolve paths relative to project root
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     raw_dir = os.path.join(project_root, "data", "raw")
     processed_dir = os.path.join(project_root, "data", "processed")
@@ -22,7 +21,6 @@ def process_raw_stock_data():
         
         if "Date" in df.columns:
             df["Date"] = pd.to_datetime(df["Date"])
-            # Drop timezone info if present to avoid alignment mismatches later
             if df["Date"].dt.tz is not None:
                 df["Date"] = df["Date"].dt.tz_localize(None)
             df = df.sort_values("Date").reset_index(drop=True)
@@ -42,4 +40,3 @@ def process_raw_stock_data():
 
 if __name__ == "__main__":
     process_raw_stock_data()
-    

@@ -10,7 +10,12 @@ def run_stock_screener():
         print("❌ Processed data directory not found.")
         return
         
-    processed_files = [f for f in os.listdir(processed_dir) if f != "NSEI_processed.csv" and f.endswith('.csv')]
+    canonical_stock_files = [
+        "HDFCBANK_NS_processed.csv",
+        "INFY_NS_processed.csv",
+        "RELIANCE_NS_processed.csv",
+        "TCS_NS_processed.csv"
+    ]
     
     qualified_stocks = []
     summary_data = []
@@ -20,14 +25,15 @@ def run_stock_screener():
     print(f"{'Ticker':<14} | {'Close':<8} | {'SMA_20':<8} | {'SMA_50':<8} | {'20D Vol Avg':<12} | {'Trend Status'}")
     print("-" * 80)
     
-    for filename in processed_files:
+    for filename in canonical_stock_files:
         file_path = os.path.join(processed_dir, filename)
+        if not os.path.exists(file_path):
+            continue
+            
         df = pd.read_csv(file_path)
-        
         if df.empty:
             continue
             
-        # Clean ticker extraction
         ticker_name = filename.split('_processed')[0].upper().replace('_', '.')
         
         latest_row = df.iloc[-1]
@@ -38,7 +44,7 @@ def run_stock_screener():
         
         is_liquid = avg_volume_20 > 100000
         
-        # Neutral trend separation: Bullish vs Neutral/Consolidating
+        # Trend separation: Bullish vs Bearish vs Neutral
         if latest_close > sma_20 and sma_20 > sma_50:
             trend_status = "BULLISH 🚀"
             is_bullish_trend = True

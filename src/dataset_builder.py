@@ -15,27 +15,13 @@ def build_point_in_time_dataset():
     dataset_dir = os.path.join(project_root, "data", "ml_ready")
     os.makedirs(dataset_dir, exist_ok=True)
     
-    nifty_path = os.path.join(processed_dir, "NSEI_processed.csv")
-    if not os.path.exists(nifty_path):
-        print("❌ Benchmark (NSEI_processed.csv) not found! Run ingestion and processing first.")
-        return
-        
-    # Load and prepare Benchmark (Nifty 50) cumulative forward returns (T+10 to T+15)
-    nifty_df = pd.read_csv(nifty_path)
-    nifty_df["Date"] = normalize_trading_dates(nifty_df["Date"])
-    nifty_df = nifty_df.sort_values("Date").reset_index(drop=True)
-    
-    # R_nifty = P_{T+15} / P_{T+10} - 1
-    # In pandas indexing: shift(-15) is P_{T+15} relative to index T, but let's align strictly:
-    # Price at T+10 is close.shift(-10), Price at T+15 is close.shift(-15)
-    nifty_df["Benchmark_Return_T10_T15"] = (nifty_df["Close"].shift(-15) / nifty_df["Close"].shift(-10)) - 1
-    
-    benchmark_lookup = nifty_df[["Date", "Benchmark_Return_T10_T15"]].copy()
-    
-    processed_files = [f for f in os.listdir(processed_dir) if f != "NSEI_processed.csv" and f.endswith('.csv')]
+    processed_files = [
+        filename for filename in os.listdir(processed_dir)
+        if filename != "NSEI_processed.csv" and filename.endswith(".csv")
+    ]
     all_stock_data = []
     
-    print("⚙️ Constructing Point-in-Time dataset with true cumulative T+10 to T+15 returns...\n")
+    print("⚙️ Constructing dataset with the T+11 to T+15 5% price target...\n")
     
     for filename in processed_files:
         file_path = os.path.join(processed_dir, filename)
@@ -51,28 +37,25 @@ def build_point_in_time_dataset():
         df["Date"] = normalize_trading_dates(df["Date"])
         df = df.sort_values("Date").reset_index(drop=True)
         
-        # --- CUMULATIVE FORWARD RETURN (T+10 to T+15) ---
-        # R_stock = (Close at T+15 / Close at T+10) - 1
-        df["Stock_Return_T10_T15"] = (df["Close"].shift(-15) / df["Close"].shift(-10)) - 1
-        
-        # Merge with Nifty benchmark returns by Date
-        df = pd.merge(df, benchmark_lookup, on="Date", how="left")
-        
-        # Buffer threshold: 5.0% outperformance + 0.5% taxes/slippage = 5.5% (0.055)
-        buffer_threshold = 0.055
-        
-        # Target assignment: Stock Return >= Benchmark Return + 5.5%
-        df["Target"] = (df["Stock_Return_T10_T15"] >= (df["Benchmark_Return_T10_T15"] + buffer_threshold)).astype(int)
+        # Compare the highest close in T+11...T+15 with 105% of the close at T.
+        future_closes = pd.concat(
+            [df["Close"].shift(-offset) for offset in range(11, 16)],
+            axis=1,
+        )
+        complete_window = future_closes.notna().all(axis=1)
+        df["Max_Close_T11_T15"] = future_closes.max(axis=1).where(complete_window)
+        df["Max_Return_T11_T15"] = df["Max_Close_T11_T15"] / df["Close"] - 1
+        threshold_hit = future_closes.ge(df["Close"] * 1.05, axis="index").any(axis=1)
+        df["Target"] = (complete_window & threshold_hit).astype(int)
         
         df["Ticker"] = ticker_name
         
-        # --- FIX ISSUE #2: Drop incomplete future windows & warm-up NaNs ---
-        # Explicitly drop rows where future returns or SMA_50 are NaN
-        df_ml = df.dropna(subset=["Stock_Return_T10_T15", "Benchmark_Return_T10_T15", "SMA_50"]).copy()
+        # Exclude incomplete forward windows and rows without the 50-day feature history.
+        df_ml = df.dropna(subset=["Max_Return_T11_T15", "SMA_50"]).copy()
         
         cols_to_keep = [
             "Date", "Ticker", "Close", "SMA_20", "SMA_50", "Volume_SMA_20", 
-            "Stock_Return_T10_T15", "Benchmark_Return_T10_T15", "Target"
+            "Max_Close_T11_T15", "Max_Return_T11_T15", "Target"
         ]
         df_ml = df_ml[cols_to_keep]
         all_stock_data.append(df_ml)
@@ -87,7 +70,7 @@ def build_point_in_time_dataset():
         print(f"📊 Total valid training rows: {len(master_df)}")
         print(f"🎯 Target Distribution:\n{master_df['Target'].value_counts()}")
         print("\n--- Sample Snapshot ---")
-        print(master_df[["Date", "Ticker", "Stock_Return_T10_T15", "Benchmark_Return_T10_T15", "Target"]].tail(3))
+        print(master_df[["Date", "Ticker", "Close", "Max_Close_T11_T15", "Max_Return_T11_T15", "Target"]].tail(3))
     else:
         print("❌ No data processed.")
 

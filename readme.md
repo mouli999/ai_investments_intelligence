@@ -37,9 +37,7 @@ python .\src\dataset_builder.py
 1. **`ingest_data.py`** downloads approximately six months of historical data for the watchlist defined in the script and saves CSV files under `data/raw/`. It uses Yahoo Finance through `yfinance`.
 2. **`process_data.py`** reads raw CSV files, calculates daily returns, 20-day and 50-day simple moving averages, and 20-day average volume, then writes processed CSV files to `data/processed/`.
 3. **`screener.py`** evaluates the latest processed data. A stock qualifies when its average volume is above 100,000 and its close is above its 20-day SMA, which is above its 50-day SMA. It prints the results and saves a dated report under `data/reports/`.
-4. **`dataset_builder.py`** combines processed files into `data/ml_ready/point_in_time_features_targets.csv`, including an average-return target for trading days T+11 through T+15.
-
-The dataset builder currently uses a **0% benchmark-return placeholder**. Its target is therefore based on the stock return exceeding a 5.5% threshold, not on measured outperformance against a benchmark. Replace the placeholder with benchmark data before interpreting the target as benchmark-relative.
+4. **`dataset_builder.py`** combines processed stock files into `data/ml_ready/point_in_time_features_targets.csv`. Its target is `1` when any closing price from T+11 through T+15 is at least 5% above the close on T; otherwise the target is `0`. Rows without the full five-trading-day evaluation window are excluded. The Nifty 50 file is not used to calculate this target.
 
 ## Alpha Vantage API Check
 

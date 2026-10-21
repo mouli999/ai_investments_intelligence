@@ -1,20 +1,41 @@
 import os
 import pandas as pd
 
+
+def normalize_trading_dates(date_values):
+    dates = pd.to_datetime(date_values)
+    if dates.dt.tz is not None:
+        dates = dates.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+    return dates.dt.normalize()
+
+
 def build_point_in_time_dataset():
-    processed_dir = os.path.join("data", "processed")
-    dataset_dir = os.path.join("data", "ml_ready")
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    processed_dir = os.path.join(project_root, "data", "processed")
+    dataset_dir = os.path.join(project_root, "data", "ml_ready")
     os.makedirs(dataset_dir, exist_ok=True)
     
-    if not os.path.exists(processed_dir):
-        print("❌ Processed data directory not found. Run Day 5 processing first.")
+    nifty_path = os.path.join(processed_dir, "NSEI_processed.csv")
+    if not os.path.exists(nifty_path):
+        print("❌ Benchmark (NSEI_processed.csv) not found! Run ingestion and processing first.")
         return
         
-    processed_files = [f for f in os.listdir(processed_dir) if f.endswith('.csv')]
+    # Load and prepare Benchmark (Nifty 50) cumulative forward returns (T+10 to T+15)
+    nifty_df = pd.read_csv(nifty_path)
+    nifty_df["Date"] = normalize_trading_dates(nifty_df["Date"])
+    nifty_df = nifty_df.sort_values("Date").reset_index(drop=True)
     
+    # R_nifty = P_{T+15} / P_{T+10} - 1
+    # In pandas indexing: shift(-15) is P_{T+15} relative to index T, but let's align strictly:
+    # Price at T+10 is close.shift(-10), Price at T+15 is close.shift(-15)
+    nifty_df["Benchmark_Return_T10_T15"] = (nifty_df["Close"].shift(-15) / nifty_df["Close"].shift(-10)) - 1
+    
+    benchmark_lookup = nifty_df[["Date", "Benchmark_Return_T10_T15"]].copy()
+    
+    processed_files = [f for f in os.listdir(processed_dir) if f != "NSEI_processed.csv" and f.endswith('.csv')]
     all_stock_data = []
     
-    print("⚙️ Constructing Point-in-Time features & T+11 to T+15 Outperformance Targets...\n")
+    print("⚙️ Constructing Point-in-Time dataset with true cumulative T+10 to T+15 returns...\n")
     
     for filename in processed_files:
         file_path = os.path.join(processed_dir, filename)
@@ -23,50 +44,37 @@ def build_point_in_time_dataset():
         if df.empty:
             continue
             
-        clean_name = filename.split('_processed_')[0].split('.dly')[0].split('.csv')[0]
-        ticker_name = clean_name.upper().replace('_', '.')
+        # Fix Ticker Name Parsing cleanly from filename (e.g. RELIANCE_NS_processed.csv -> RELIANCE.NS)
+        ticker_prefix = filename.split('_processed')[0]
+        ticker_name = ticker_prefix.replace('_', '.')
         
-        df["Date"] = pd.to_datetime(df["Date"])
+        df["Date"] = normalize_trading_dates(df["Date"])
         df = df.sort_values("Date").reset_index(drop=True)
         
-        # --- FORWARD EVALUATION WINDOW: T+11 to T+15 ---
-        # Calculate daily returns first if not present
-        if "Daily_Return" not in df.columns:
-            df["Daily_Return"] = df["Close"].pct_change()
-            
-        # To evaluate the window from T+11 to T+15:
-        # We can calculate the mean return across t+11, t+12, t+13, t+14, t+15.
-        # In pandas, rolling mean of future values can be achieved by reversing or shifting.
-        # Alternatively, find the average price over T+11 to T+15 relative to T.
+        # --- CUMULATIVE FORWARD RETURN (T+10 to T+15) ---
+        # R_stock = (Close at T+15 / Close at T+10) - 1
+        df["Stock_Return_T10_T15"] = (df["Close"].shift(-15) / df["Close"].shift(-10)) - 1
         
-        # Let's compute average return across the T+11 to T+15 window:
-        # We shift backward so that row T contains the mean return from index T+11 to T+15.
-        # A clean way is taking the rolling mean of Daily_Return shifted backwards.
+        # Merge with Nifty benchmark returns by Date
+        df = pd.merge(df, benchmark_lookup, on="Date", how="left")
         
-        # Mean return of the stock from T+11 to T+15:
-        # We can average the 'Daily_Return' values from shift(-11) to shift(-15)
-        future_window_returns = pd.concat([df["Daily_Return"].shift(-i) for i in range(11, 16)], axis=1).mean(axis=1)
-        df["Stock_Avg_Return_T11_T15"] = future_window_returns
+        # Buffer threshold: 5.0% outperformance + 0.5% taxes/slippage = 5.5% (0.055)
+        buffer_threshold = 0.055
         
-        # Note: In a complete pipeline, we will also bring in the Nifty 50 benchmark return for T+11 to T+15.
-        # For now, let's set a placeholder or baseline benchmark assumption (e.g., assuming 0% or matching benchmark file)
-        # Let's assume Benchmark Return for T+11 to T+15 is fetched or defaulted to 0 for single-stock testing:
-        benchmark_return_placeholder = 0.00  # Will be replaced by actual Nifty 50 index data file later
-        
-        buffer_threshold = 0.055  # 5.5% outperformance buffer (5.0% target + 0.5% taxes/slippage)
-        
-        # Ground Truth Label (y) calculation from problem statement:
-        # Stock Average Return (T+11 to T+15) >= [Benchmark Average Return + 5.5%]
-        df["Target"] = (df["Stock_Avg_Return_T11_T15"] >= (benchmark_return_placeholder + buffer_threshold)).astype(int)
+        # Target assignment: Stock Return >= Benchmark Return + 5.5%
+        df["Target"] = (df["Stock_Return_T10_T15"] >= (df["Benchmark_Return_T10_T15"] + buffer_threshold)).astype(int)
         
         df["Ticker"] = ticker_name
         
-        # Drop rows where future evaluation window goes beyond available data (the last 15 rows)
-        df_ml = df.dropna(subset=["Stock_Avg_Return_T11_T15", "SMA_50"]).copy()
+        # --- FIX ISSUE #2: Drop incomplete future windows & warm-up NaNs ---
+        # Explicitly drop rows where future returns or SMA_50 are NaN
+        df_ml = df.dropna(subset=["Stock_Return_T10_T15", "Benchmark_Return_T10_T15", "SMA_50"]).copy()
         
-        cols_to_keep = ["Date", "Ticker", "Close", "SMA_20", "SMA_50", "Volume_SMA_20", "Stock_Avg_Return_T11_T15", "Target"]
+        cols_to_keep = [
+            "Date", "Ticker", "Close", "SMA_20", "SMA_50", "Volume_SMA_20", 
+            "Stock_Return_T10_T15", "Benchmark_Return_T10_T15", "Target"
+        ]
         df_ml = df_ml[cols_to_keep]
-        
         all_stock_data.append(df_ml)
         
     if all_stock_data:
@@ -74,14 +82,16 @@ def build_point_in_time_dataset():
         dataset_path = os.path.join(dataset_dir, "point_in_time_features_targets.csv")
         master_df.to_csv(dataset_path, index=False)
         
-        print(f"✅ Point-in-Time dataset successfully aligned with Problem Statement (T+11 to T+15 window)!")
+        print(f"✅ Successfully generated audit-ready ML dataset!")
         print(f"📂 Saved to: {dataset_path}")
+        print(f"📊 Total valid training rows: {len(master_df)}")
+        print(f"🎯 Target Distribution:\n{master_df['Target'].value_counts()}")
         print("\n--- Sample Snapshot ---")
-        print(master_df[["Date", "Ticker", "Close", "Stock_Avg_Return_T11_T15", "Target"]].tail(3))
+        print(master_df[["Date", "Ticker", "Stock_Return_T10_T15", "Benchmark_Return_T10_T15", "Target"]].tail(3))
     else:
-        print("❌ No data available.")
+        print("❌ No data processed.")
 
 if __name__ == "__main__":
     build_point_in_time_dataset()
-    
+
     

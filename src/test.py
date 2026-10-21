@@ -1,12 +1,15 @@
+import os
+
 import requests
 
 def test_financial_data_with_API_key():
 
+    api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    if not api_key:
+        raise RuntimeError("Set the ALPHAVANTAGE_API_KEY environment variable before running this script.")
+
     # the URL or API end point where you want to fetch data
     url="https://www.alphavantage.co/query"
-
-    # API Key
-    api_key='RK1VS37BVTBB7FG0'
 
     # params to be sent
     params= {

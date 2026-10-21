@@ -19,7 +19,7 @@ def run_stock_screener():
     summary_data = []
     date_str = datetime.now().strftime("%Y-%m-%d")
     
-    print("🔍 Running Investment Screener across processed assets (with SMA-50 & Volumes)...\n")
+    print("🔍 Running Investment Screener (Strict Trend: Close > SMA20 > SMA50)...\n")
     print(f"{'Ticker':<14} | {'Close':<8} | {'SMA_20':<8} | {'SMA_50':<8} | {'20D Vol Avg':<12} | {'Trend'}")
     print("-" * 80)
     
@@ -30,9 +30,10 @@ def run_stock_screener():
         if df.empty:
             continue
             
-        # Cleanly extract the ticker name
-        base_name = filename.split('_processed_')[0]
-        ticker_name = base_name.upper().replace('_', '.')
+        # Cleanly extract the actual ticker name (stripping out file extensions and dates)
+        # e.g., hdfcbank.ns_processed_2026-10-21.csv -> HDFCBANK.NS
+        clean_name = filename.split('_processed_')[0].split('.dly')[0].split('.csv')[0]
+        ticker_name = clean_name.upper().replace('_', '.')
         
         # Get the most recent trading row
         latest_row = df.iloc[-1]
@@ -42,9 +43,9 @@ def run_stock_screener():
         sma_50 = latest_row["SMA_50"]
         avg_volume_20 = latest_row["Volume_SMA_20"]
         
-        # Screening criteria
+        # Strict institutional screening criteria
         is_liquid = avg_volume_20 > 100000
-        is_bullish_trend = latest_close > sma_20 and sma_20 > sma_50  # Golden/Bullish structure check
+        is_bullish_trend = latest_close > sma_20 and sma_20 > sma_50
         
         trend_status = "BULLISH 🚀" if is_bullish_trend else "BEARISH 📉"
         
@@ -75,7 +76,8 @@ def run_stock_screener():
     report_path = os.path.join(reports_dir, f"screener_report_{date_str}.csv")
     report_df = pd.DataFrame(summary_data)
     report_df.to_csv(report_path, index=False)
-    print(f"📂 Updated permanent screening report saved to: {report_path}")
+    print(f"📂 Permanent screening report successfully saved to: {report_path}")
 
 if __name__ == "__main__":
     run_stock_screener()
+    
